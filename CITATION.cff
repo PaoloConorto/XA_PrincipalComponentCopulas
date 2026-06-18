@@ -1,0 +1,26 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite both the software and the accompanying thesis below."
+title: "Principal Component Copula: a Python implementation"
+authors:
+  - family-names: "Conorto"
+    given-names: "Paolo"
+    email: "pconorto@gmail.com"
+year: 2026
+license: MIT
+type: software
+# TODO: add the repository URL once published
+# repository-code: "https://github.com/PaoloConorto/<repo>"
+
+# The work this implementation accompanies. Please cite this when using the code.
+references:
+  - type: thesis
+    title: "Principal Component Copulas for Cross-Asset Modelling"
+    authors:
+      - family-names: "Conorto"
+        given-names: "Paolo"
+    year: 2026
+    month: 6
+    thesis-type: "Master's thesis"
+    institution:
+      name: "University of Groningen"
+    department: "Faculty of Economics and Business, MSc Econometrics, Operations Research and Actuarial Studies (Financial Econometrics and Actuarial Studies)"
