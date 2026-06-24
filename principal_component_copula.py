@@ -6,7 +6,17 @@ from scipy.special import gammaln, gamma as gamma_func, kv as bessel_kv
 from scipy.stats import norm, genhyperbolic, t, invgamma, rankdata
 from scipy.interpolate import interp1d
 from statsmodels.stats.correlation_tools import corr_nearest
-from typing import Literal, Tuple, Dict, Callable, List, Optional, TypedDict
+from typing import (
+    Literal,
+    Tuple,
+    Dict,
+    Callable,
+    List,
+    Optional,
+    TypedDict,
+    Union,
+    NoReturn,
+)
 import tqdm as tqdm_module
 import warnings
 import logging
@@ -109,7 +119,7 @@ class PrincipalComponentCopula:
 
     def __init__(
         self, dim: int, cop_type: Literal["t", "cross", "normal"] = "t", k: int = 1
-    ):
+    ) -> None:
         if cop_type not in {"t", "cross", "normal"}:
             raise ValueError(
                 f"cop_type must be one of 't', 'cross', 'normal'; got {cop_type!r}."
@@ -300,7 +310,7 @@ class PrincipalComponentCopula:
 
     def _gh_constrained_params(
         self, alpha_bar: float, beta_bar: float, lam: float, target_variance: float
-    ):
+    ) -> GHNormalParams:
         """
         Given free shape parameters (alpha_bar, beta_bar) and the target
         variance Lambda_1, compute the full set of constrained GH parameters.
@@ -321,8 +331,14 @@ class PrincipalComponentCopula:
         )
 
     def _gh_solve_chi(
-        self, alpha_bar, beta_bar, lam, target_variance, chi_lo=1e-4, chi_hi=1e5
-    ):
+        self,
+        alpha_bar: float,
+        beta_bar: float,
+        lam: float,
+        target_variance: float,
+        chi_lo: float = 1e-4,
+        chi_hi: float = 1e5,
+    ) -> float:
         """
         Solve for chi such that  Var[P_1] = target_variance,
         where P_1 ~ GH with Sigma=1 convention.
@@ -336,7 +352,7 @@ class PrincipalComponentCopula:
         """
         psi = alpha_bar**2 - beta_bar**2
 
-        def _residual(chi):
+        def _residual(chi: float) -> float:
             EW, VarW = self._gig_mean_var(lam, chi, psi)
             return EW + beta_bar**2 * VarW - target_variance
 
@@ -1069,7 +1085,7 @@ class PrincipalComponentCopula:
         """
         w_i = W[i, :]
 
-        def cf_Yi(t):
+        def cf_Yi(t: np.ndarray) -> np.ndarray:
             t = np.asarray(t, dtype=complex)
             result = np.ones_like(t)
             for j, cf_j in enumerate(cf_generators):
@@ -1119,7 +1135,7 @@ class PrincipalComponentCopula:
         skew_sigma_sq_eff = float(np.dot(w_i[:k] ** 2, Sigma11))
         sigma_sq_eff = float(np.dot(w_i[k:] ** 2, Sigma_diag))
 
-        def cf_Yi(t_arg):
+        def cf_Yi(t_arg: np.ndarray) -> np.ndarray:
             t_arg = np.asarray(t_arg, dtype=complex)
             part1 = self._cf_skewt(t_arg, nu1, gamma_eff, skew_sigma_sq_eff, mu_eff)
             part2 = self._cf_symm_t_1d(t_arg, nu_rest, sigma_sq_eff)
@@ -1150,7 +1166,7 @@ class PrincipalComponentCopula:
         max_iters: int = 10,
         method: Literal["GMM", "MLE"] = "GMM",
         dependent: bool = False,
-    ):
+    ) -> Dict:
         """
         Fit the PCC to data X.
 
@@ -1204,17 +1220,17 @@ class PrincipalComponentCopula:
             return self._fit_cross(X, dependent=dependent)
         return self._fit_t(X)
 
-    def _fit_normal(self, X: np.ndarray):
+    def _fit_normal(self, X: np.ndarray) -> Dict:
         return (
             self.fit_normal_gmm(X) if self.method == "GMM" else self.fit_normal_mle(X)
         )
 
-    def _fit_t(self, X: np.ndarray):
+    def _fit_t(self, X: np.ndarray) -> Dict:
         return (
             self.fit_t_gmm(X, k=self.k) if self.method == "GMM" else self.fit_t_mle(X)
         )
 
-    def _fit_cross(self, X: np.ndarray, dependent: bool = False):
+    def _fit_cross(self, X: np.ndarray, dependent: bool = False) -> Dict:
         return (
             self.fit_cross_gmm(X, k=self.k, dependent=dependent)
             if self.method == "GMM"
@@ -1370,7 +1386,7 @@ class PrincipalComponentCopula:
             n_iter=k + 1,
         )
 
-    def fit_normal_mle(self, X: np.ndarray):
+    def fit_normal_mle(self, X: np.ndarray) -> NoReturn:
         """
         Full MLE for the HB-N PCC.
 
@@ -1395,7 +1411,7 @@ class PrincipalComponentCopula:
         b: float = 10.0,
         Nc: int = 100,
         n_grid: int = 2000,
-    ):
+    ) -> Dict:
         """
         Fit the Skew-t1 / t_{d-k} PCC via Algorithm 1 (Gubbels et al., 2025).
 
@@ -1573,7 +1589,7 @@ class PrincipalComponentCopula:
             n_iter=it + 1,
         )
 
-    def fit_t_mle(self, X: np.ndarray):
+    def fit_t_mle(self, X: np.ndarray) -> NoReturn:
         """Full MLE for the Skew-t1 / t_{d-1} PCC (not yet implemented)."""
         raise NotImplementedError(
             "Full MLE requires the COS-method for marginal densities (Eqs. 20-22 "
@@ -1757,7 +1773,7 @@ class PrincipalComponentCopula:
         sigma_sq_eff = float(np.dot(w_i[:k] ** 2, Sigma11))
         gauss_var = float(np.dot(w_i[k:] ** 2, Lambda[k:]))
 
-        def cf_Yi(t_arg):
+        def cf_Yi(t_arg: np.ndarray) -> np.ndarray:
             t_arg = np.asarray(t_arg, dtype=complex)
             part1 = self._cf_skewt(t_arg, nu1, gamma_eff, sigma_sq_eff, mu_eff)
             part2 = self._cf_normal(t_arg, gauss_var)
@@ -1875,7 +1891,7 @@ class PrincipalComponentCopula:
         b: float = 10.0,
         Nc: int = 100,
         n_grid: int = 2000,
-    ):
+    ) -> Dict:
         """
         Fit the cross-asset PCC via Algorithm 1 (§5).
 
@@ -2187,7 +2203,7 @@ class PrincipalComponentCopula:
                 n_iter=it + 1,
             )
 
-    def fit_cross_mle(self, X: np.ndarray):
+    def fit_cross_mle(self, X: np.ndarray) -> NoReturn:
         """Full MLE for the Skew-t1*k-Normal PCC (not yet implemented)."""
         raise NotImplementedError(
             "Full MLE requires the COS-method for marginal densities (Eqs. 20-22 "
@@ -2514,7 +2530,7 @@ class PrincipalComponentCopula:
             est_nat = theta.copy()
             jac = np.ones(2)  # optimisation is directly on the natural params
 
-            def objective(s):
+            def objective(s: np.ndarray) -> float:
                 return self._neg_copula_ll_shape(
                     s, U, W, Lambda, lam_gh, a, b, Nc, n_grid
                 )
@@ -2534,7 +2550,7 @@ class PrincipalComponentCopula:
             # nu1 = 4 + exp(eta1)  -> d nu1/d eta1 = nu1 - 4 ; gamma1 identity
             jac = np.concatenate([[nu1 - 4.0], np.ones(k), [nu_rest - 2.0]])
 
-            def objective(s):
+            def objective(s: np.ndarray) -> float:
                 return self._neg_copula_ll_shape_t(s, U, W, Lambda, a, b, Nc, n_grid, k)
 
             return theta, names, est_nat, jac, objective
@@ -2557,7 +2573,7 @@ class PrincipalComponentCopula:
                 jac[2 * j + 1] = 1.0
                 names += [f"nu_{j + 1}", f"gamma_{j + 1}"]
 
-            def objective(s):
+            def objective(s: np.ndarray) -> float:
                 return self._neg_copula_ll_cross(s, U, W, Lambda, K, a, b, Nc, n_grid)
 
             return theta, names, est_nat, jac, objective
@@ -2571,7 +2587,7 @@ class PrincipalComponentCopula:
             est_nat = np.concatenate([[nu1], gamma1])
             jac = np.concatenate([[nu1 - 4.0], np.ones(k)])
 
-            def objective(s):
+            def objective(s: np.ndarray) -> float:
                 return self._neg_copula_ll_cross_dep(
                     s, U, W, Lambda, k, a, b, Nc, n_grid
                 )
@@ -2754,7 +2770,7 @@ class PrincipalComponentCopula:
         return_y: bool = False,
         return_p: bool = False,
         seed: int | np.random.Generator | None = 42,
-    ) -> np.ndarray:
+    ) -> Union[np.ndarray, Tuple[np.ndarray, ...]]:
         """
         Simulate n_samples copula observations from the fitted PCC.
 
@@ -2797,7 +2813,7 @@ class PrincipalComponentCopula:
 
     def _simulate_normal(
         self, n_samples: int, return_y: bool, return_p: bool, rng: np.random.Generator
-    ):
+    ) -> Union[np.ndarray, Tuple[np.ndarray, ...]]:
         """
         Simulate from the fitted Hyperbolic-Normal PCC.
 
@@ -2882,7 +2898,7 @@ class PrincipalComponentCopula:
 
     def _simulate_cross(
         self, n_samples: int, return_y: bool, return_p: bool, rng: np.random.Generator
-    ):
+    ) -> Union[np.ndarray, Tuple[np.ndarray, ...]]:
         """
         Simulate from the fitted cross-asset PCC.
 
@@ -2982,7 +2998,7 @@ class PrincipalComponentCopula:
 
     def _simulate_t(
         self, n_samples: int, return_y: bool, return_p: bool, rng: np.random.Generator
-    ):
+    ) -> Union[np.ndarray, Tuple[np.ndarray, ...]]:
         """
         Simulate from the fitted Skew-t_k / t_{d-k} PCC.
 
