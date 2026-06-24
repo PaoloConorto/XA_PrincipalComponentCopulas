@@ -977,7 +977,7 @@ class PrincipalComponentCopula:
         a: float,
         b: float,
         Nc: int,
-        n_grid: np.ndarray,
+        n_grid: int,
     ) -> float:
         """
         Negative copula log-likelihood as a function of the free shape
