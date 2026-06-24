@@ -3,13 +3,16 @@ from numpy.linalg import eigh
 from scipy.linalg import eigh as scipy_eigh
 from scipy.optimize import minimize, brentq
 from scipy.special import gammaln, gamma as gamma_func, kv as bessel_kv
-from scipy.stats import norm, genhyperbolic, t, invgamma
+from scipy.stats import norm, genhyperbolic, t, invgamma, rankdata
 from scipy.interpolate import interp1d
 from statsmodels.stats.correlation_tools import corr_nearest
 from sklearn.covariance import LedoitWolf as _LedoitWolf
 from typing import Literal, Tuple, Dict, Callable, List, Optional
 import tqdm as tqdm_module
 import warnings
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class PrincipalComponentCopula:
@@ -32,12 +35,24 @@ class PrincipalComponentCopula:
 
     Attributes (populated after fitting)
     --
-    params : tuple or dict
-        "normal": (lambda, alpha, beta, 0, sigma) for genhyperbolic.
-        "t":      {"nu1": float, "a1": float, "nu_rest": float}
-                  where nu1 is the AC-skew-t degrees of freedom, a1 is the
-                  Azzalini-Capitanio asymmetry parameter (a1=0 => symmetric t),
-                  and nu_rest is the degrees of freedom for higher PCs.
+    params : dict
+        Fitted generator parameters; the schema depends on ``cop_type``.
+
+        "normal": dict with keys
+            ``{lam, chi, psi, mu, beta_bar, alpha_bar}``
+            (the constrained GH parameters of the first PC; higher PCs are
+            Gaussian with variances ``Lambda[1:]``).
+        "t": dict with keys
+            ``{nu1, gamma1, Sigma11, mu1, nu_rest, Sigma_diag}``
+            where ``gamma1``, ``Sigma11`` and ``mu1`` are length-k arrays for
+            the GH-skew-t leading block, ``nu_rest`` is the degrees of freedom
+            of the higher symmetric-t PCs and ``Sigma_diag`` their diagonal
+            scales.
+        "cross": dict describing the cross-asset PCC. For the independent
+            case (``dependent=False``):
+                ``{"per_pc": [...], "K": int, "dependent": False}``
+            For the dependent case (``dependent=True``):
+                ``{"t_params_dep": {...}, "K": int, "dependent": True}``.
     W : np.ndarray, shape (d, d)
         Eigenvector matrix from PCA on normal scores (columns = eigenvectors,
         ordered by descending eigenvalue).
@@ -167,6 +182,13 @@ class PrincipalComponentCopula:
             return np.eye(d)
 
     # Score / density utilities
+
+    def _pseudo_observations(self, X: np.ndarray) -> np.ndarray:
+        """Rank-based pseudo-observations U=rank(X)/(n+1) with average ranks for ties."""
+        X = np.asarray(X, dtype=float)
+        n = X.shape[0]
+        ranks = rankdata(X, method="average", axis=0)
+        return ranks / (n + 1.0)
 
     def _normal_scores(self, U: np.ndarray, eps: float = 1e-12) -> np.ndarray:
         """
@@ -1105,9 +1127,19 @@ class PrincipalComponentCopula:
 
         Returns
         ---
-        params : tuple or dict  -- fitted generator parameters.
-        W      : np.ndarray, shape (d, d)
-        Lambda : np.ndarray, shape (d,)
+        result : dict
+            The fit summary returned by the underlying ``fit_*`` routine
+            (keys include ``parameters``, ``W``, ``Lambda``, ...). The fitted
+            generator parameters are stored on ``self.params`` as a dict whose
+            schema depends on ``cop_type``:
+
+            "normal": ``{lam, chi, psi, mu, beta_bar, alpha_bar}``.
+            "t":      ``{nu1, gamma1, Sigma11, mu1, nu_rest, Sigma_diag}``
+                      (``gamma1``/``Sigma11``/``mu1`` are length-k arrays).
+            "cross":  ``{"per_pc": [...], "K", "dependent": False}`` when
+                      independent, or
+                      ``{"t_params_dep": {...}, "K", "dependent": True}`` when
+                      dependent.
         """
         X = np.asarray(X, float)
         if X.ndim != 2:
@@ -1182,8 +1214,7 @@ class PrincipalComponentCopula:
         Lambda    : np.ndarray, shape (d,)
         """
         n, _ = X.shape
-        ranks = np.argsort(np.argsort(X, axis=0), axis=0) + 1
-        U = ranks / (n + 1.0)
+        U = self._pseudo_observations(X)
         Y = self._normal_scores(U, eps)
 
         corr = self._estimate_correlation(Y)
@@ -1259,7 +1290,7 @@ class PrincipalComponentCopula:
             W, Lambda = W_new, Lambda_new
 
         if converged:
-            print("Algorithm Converged")
+            logger.info("Algorithm Converged")
 
         if best_nll < 1e6:
             W, Lambda = best_W.copy(), best_Lambda.copy()
@@ -1357,8 +1388,7 @@ class PrincipalComponentCopula:
 
         n, _ = X.shape
         # Section 3.1:  pseudo-copula observations
-        ranks = np.argsort(np.argsort(X, axis=0), axis=0) + 1
-        U = ranks / (n + 1.0)
+        U = self._pseudo_observations(X)
         Y = self._normal_scores(U, eps)
 
         corr = self._estimate_correlation(Y)
@@ -1450,7 +1480,7 @@ class PrincipalComponentCopula:
             W, Lambda = W_new, Lambda_new
 
         if converged:
-            print("Algorithm 1 (Skew-t) converged.")
+            logger.info("Algorithm 1 (Skew-t) converged.")
 
         #  final quantities: prefer best-seen state if final is degenerate
         if best_nll < 1e6:
@@ -1831,8 +1861,7 @@ class PrincipalComponentCopula:
             raise ValueError(f"Generator block bigger than dim: k={k}>{self.dim}=d")
 
         n, _ = X.shape
-        ranks = np.argsort(np.argsort(X, axis=0), axis=0) + 1
-        U = ranks / (n + 1.0)
+        U = self._pseudo_observations(X)
         Y = self._normal_scores(U, eps)
 
         corr = self._estimate_correlation(Y)
@@ -1932,7 +1961,7 @@ class PrincipalComponentCopula:
                 W, Lambda = W_new, Lambda_new
 
             if converged:
-                print("Algorithm 1 (cross-asset PCC, independent) converged.")
+                logger.info("Algorithm 1 (cross-asset PCC, independent) converged.")
 
             if best_nll < 1e6:
                 W, Lambda = best_W.copy(), best_Lambda.copy()
@@ -2072,7 +2101,7 @@ class PrincipalComponentCopula:
                 W, Lambda = W_new, Lambda_new
 
             if converged:
-                print("Algorithm 1 (cross-asset PCC, dependent) converged.")
+                logger.info("Algorithm 1 (cross-asset PCC, dependent) converged.")
 
             if best_nll < 1e6:
                 W, Lambda = best_W.copy(), best_Lambda.copy()
@@ -2134,6 +2163,14 @@ class PrincipalComponentCopula:
         if self.W is None or self.params is None:
             raise RuntimeError("Fit model before calling logpdf_obs.")
         U = np.asarray(U, dtype=float)
+        if U.ndim != 2:
+            raise ValueError(f"U must be a 2-D array; got ndim={U.ndim}.")
+        if U.shape[1] != self.dim:
+            raise ValueError(
+                f"U has {U.shape[1]} columns but the model dimension is {self.dim}."
+            )
+        if np.any(U <= 0.0) or np.any(U >= 1.0):
+            raise ValueError("U must lie strictly inside (0, 1).")
         n, d = U.shape
         W, Lambda = self.W, self.Lambda
         k = self.k
@@ -2391,7 +2428,7 @@ class PrincipalComponentCopula:
 
         raise ValueError(f"Unknown copula type: {t!r}")
 
-    def parameter_uncertanity(
+    def parameter_uncertainty(
         self,
         X: np.ndarray,
         alpha: float = 0.05,
@@ -2452,7 +2489,7 @@ class PrincipalComponentCopula:
                               (names, estimate, se, ci_lower, ci_upper).
         """
         if self.W is None or self.params is None:
-            raise RuntimeError("Fit model before calling parameter_uncertanity.")
+            raise RuntimeError("Fit model before calling parameter_uncertainty.")
 
         X = np.asarray(X, dtype=float)
         n, d = X.shape
@@ -2462,8 +2499,7 @@ class PrincipalComponentCopula:
             )
 
         # Rank-based pseudo-observations -- identical to the fit routines.
-        ranks = np.argsort(np.argsort(X, axis=0), axis=0) + 1
-        U = ranks / (n + 1.0)
+        U = self._pseudo_observations(X)
 
         W, Lambda, k = self.W, self.Lambda, self.k
         z = float(norm.ppf(1.0 - alpha / 2.0))
@@ -2557,6 +2593,16 @@ class PrincipalComponentCopula:
 
         self.uncertainty = result
         return result
+
+    def parameter_uncertanity(self, *args, **kwargs):
+        """Deprecated alias for :meth:`parameter_uncertainty` (kept for
+        backward compatibility; the original method name was misspelled)."""
+        warnings.warn(
+            "parameter_uncertanity is deprecated; use parameter_uncertainty.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.parameter_uncertainty(*args, **kwargs)
 
     # Simulation
 
