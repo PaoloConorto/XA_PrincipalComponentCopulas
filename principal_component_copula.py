@@ -6,13 +6,55 @@ from scipy.special import gammaln, gamma as gamma_func, kv as bessel_kv
 from scipy.stats import norm, genhyperbolic, t, invgamma, rankdata
 from scipy.interpolate import interp1d
 from statsmodels.stats.correlation_tools import corr_nearest
-from sklearn.covariance import LedoitWolf as _LedoitWolf
-from typing import Literal, Tuple, Dict, Callable, List, Optional
+from typing import Literal, Tuple, Dict, Callable, List, Optional, TypedDict
 import tqdm as tqdm_module
 import warnings
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+# Typed containers for the fitted generator parameters (self.params).
+# These document the runtime dict schemas; runtime dict construction is
+# unchanged and these are not enforced at runtime.
+
+
+class GHNormalParams(TypedDict):
+    """Fitted parameters for the Hyperbolic-Normal PCC (cop_type='normal')."""
+
+    lam: float
+    chi: float
+    psi: float
+    mu: float
+    beta_bar: float
+    alpha_bar: float
+
+
+class SkewTParams(TypedDict):
+    """Fitted parameters for the Skew-t_k / t_{d-k} PCC (cop_type='t')."""
+
+    nu1: float
+    gamma1: np.ndarray  # length-k array
+    Sigma11: np.ndarray  # length-k array
+    mu1: np.ndarray  # length-k array
+    nu_rest: float
+    Sigma_diag: np.ndarray  # length-(d-k) array
+
+
+class CrossIndependentParams(TypedDict):
+    """Fitted parameters for the independent cross-asset PCC (dependent=False)."""
+
+    per_pc: List[Dict]
+    K: int
+    dependent: bool
+
+
+class CrossDependentParams(TypedDict):
+    """Fitted parameters for the dependent cross-asset PCC (dependent=True)."""
+
+    t_params_dep: Dict
+    K: int
+    dependent: bool
 
 
 class PrincipalComponentCopula:
@@ -37,6 +79,9 @@ class PrincipalComponentCopula:
     --
     params : dict
         Fitted generator parameters; the schema depends on ``cop_type``.
+        See the ``GHNormalParams`` / ``SkewTParams`` /
+        ``CrossIndependentParams`` / ``CrossDependentParams`` TypedDicts for
+        the exact key/type layout.
 
         "normal": dict with keys
             ``{lam, chi, psi, mu, beta_bar, alpha_bar}``
@@ -2264,6 +2309,107 @@ class PrincipalComponentCopula:
             log_marg_sum += np.log(np.maximum(dens_i, 1e-300))
 
         return log_fY - log_marg_sum
+
+    def _marginal_cfs(self) -> List[Callable]:
+        """
+        Build the list of d marginal characteristic functions phi_{Y_i} for the
+        fitted model, dispatching on ``self.type`` exactly as ``logpdf_obs`` and
+        the simulators do.  Requires a fitted model.
+        """
+        if self.W is None or self.params is None:
+            raise RuntimeError("Fit model before building marginal CFs.")
+        W, Lambda, k, d = self.W, self.Lambda, self.k, self.dim
+
+        if self.type == "normal":
+            cfs = self._build_generator_cfs(Lambda, self.params)
+            return [self._make_marginal_cf(i, W, cfs) for i in range(d)]
+        if self.type == "t":
+            tp = self.params
+            return [self._make_marginal_cf_t(i, W, tp, k) for i in range(d)]
+        if self.type == "cross" and not self.params.get("dependent", True):
+            cfs = self._build_generator_cfs_cross(Lambda, self.params["per_pc"], k)
+            return [self._make_marginal_cf(i, W, cfs) for i in range(d)]
+        # dependent cross-asset PCC
+        tp = self.params["t_params_dep"]
+        return [self._make_marginal_cf_cross_dep(i, W, tp, k, Lambda) for i in range(d)]
+
+    def cos_truncation_report(
+        self,
+        a: float = -10.0,
+        b: float = 10.0,
+        Nc: int = 100,
+        n_grid: int = 2000,
+        tol: float = 1e-3,
+    ) -> Dict:
+        """
+        Diagnostics for the COS-method truncation of the fitted marginals.
+
+        For each marginal Y_i the COS-CDF F_i is built from its characteristic
+        function and checked at the truncation bounds: a well-truncated F should
+        satisfy  F_i(a) ~ 0  and  F_i(b) ~ 1.  The per-margin tail-mass
+        residuals are
+
+            left_tail  = F_i(a)            (mass below the lower bound)
+            right_tail = 1 - F_i(b)        (mass above the upper bound)
+
+        Large residuals indicate the interval [a, b] is too narrow (or Nc too
+        small) for that marginal.  A warning is issued if any residual exceeds
+        ``tol`` (~1e-3 by default).  Requires a fitted model.
+
+        Parameters
+        --
+        a, b   : float   COS truncation interval (should match the fit).
+        Nc     : int     number of COS cosine terms.
+        n_grid : int     grid resolution used to evaluate the COS-CDF.
+        tol    : float   residual threshold above which a warning is raised.
+
+        Returns
+        ---
+        dict with keys
+            ``a``, ``b``, ``Nc``, ``tol``,
+            ``left_tail``  : (d,) array of F_i(a),
+            ``right_tail`` : (d,) array of 1 - F_i(b),
+            ``max_residual`` : float, the worst residual over all margins,
+            ``ok``         : bool, True if max_residual <= tol.
+        """
+        if self.W is None or self.params is None:
+            raise RuntimeError("Fit model before calling cos_truncation_report.")
+
+        d = self.dim
+        marginal_cfs = self._marginal_cfs()
+
+        # Evaluate each COS-CDF on a fine, monotonised grid and read off F(a),
+        # F(b) at the truncation bounds.
+        y_grid = np.linspace(a, b, n_grid)
+        left_tail = np.empty(d)
+        right_tail = np.empty(d)
+        for i in range(d):
+            cdf = self._cos_cdf(y_grid, marginal_cfs[i], a, b, Nc)
+            cdf = np.maximum.accumulate(cdf)
+            left_tail[i] = float(cdf[0])
+            right_tail[i] = float(1.0 - cdf[-1])
+
+        residuals = np.concatenate([np.abs(left_tail), np.abs(right_tail)])
+        max_residual = float(np.max(residuals)) if residuals.size else 0.0
+        ok = max_residual <= tol
+
+        if not ok:
+            warnings.warn(
+                f"COS truncation tail mass exceeds tol={tol:g} "
+                f"(max residual {max_residual:g}); widen [a, b] or raise Nc.",
+                RuntimeWarning,
+            )
+
+        return {
+            "a": a,
+            "b": b,
+            "Nc": Nc,
+            "tol": tol,
+            "left_tail": left_tail,
+            "right_tail": right_tail,
+            "max_residual": max_residual,
+            "ok": ok,
+        }
 
     # Parameter uncertainty  --  Wald confidence intervals
 
