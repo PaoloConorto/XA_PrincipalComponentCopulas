@@ -1254,9 +1254,15 @@ class PrincipalComponentCopula:
 
         Returns
         ---
-        gh_params : tuple -- (lambda, alpha, beta, 0, sigma) for genhyperbolic.
-        W         : np.ndarray, shape (d, d)
-        Lambda    : np.ndarray, shape (d,)
+        dict with keys:
+            parameters     : GH params dict
+                             {lam, chi, psi, mu, beta_bar, alpha_bar} (Sigma=1).
+            W              : np.ndarray, shape (d, d)  -- eigenvectors.
+            Lambda         : np.ndarray, shape (d,)    -- eigenvalues.
+            rho_Y          : np.ndarray, shape (d, d)  -- implied correlation.
+            log_likelihood : float
+            converged      : bool
+            n_iter         : int
         """
         n, _ = X.shape
         U = self._pseudo_observations(X)
@@ -2795,8 +2801,8 @@ class PrincipalComponentCopula:
         """
         Simulate from the fitted Hyperbolic-Normal PCC.
 
-            P1 ~ GH(lambda, alpha, beta, 0, sigma)     (first PC)
-            Pj ~ N(0, Lambda_j)  for j > 1             (remaining PCs)
+            P1 ~ GH(lam, chi, psi, mu, beta_bar)  (Sigma=1)   (first PC)
+            Pj ~ N(0, Lambda_j)  for j > 1                     (remaining PCs)
 
         Rotation:  Y = P W^T
         Marginals: U_i = F_{Y_i}(Y_i) computed via COS-CDF using the
