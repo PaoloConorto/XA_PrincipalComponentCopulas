@@ -2740,16 +2740,6 @@ class PrincipalComponentCopula:
         self.uncertainty = result
         return result
 
-    def parameter_uncertanity(self, *args, **kwargs):
-        """Deprecated alias for :meth:`parameter_uncertainty` (kept for
-        backward compatibility; the original method name was misspelled)."""
-        warnings.warn(
-            "parameter_uncertanity is deprecated; use parameter_uncertainty.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return self.parameter_uncertainty(*args, **kwargs)
-
     # Simulation
 
     def simulate(
