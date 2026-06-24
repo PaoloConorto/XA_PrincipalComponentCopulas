@@ -1243,7 +1243,6 @@ class PrincipalComponentCopula:
         self,
         X: np.ndarray,
         eps: float = 1e-12,
-        tol: float = 1e-6,
         ftol: float = 1e-4,
         lam0: float = 1.0,
         a: float = -10.0,
@@ -1260,8 +1259,9 @@ class PrincipalComponentCopula:
         3. PCA on the sample correlation of Y  ->  W, Lambda.
         4. PC scores  P = Y @ W.
         5. Initialise GH parameters from genhyperbolic.fit on P[:,0] (floc=0).
-        6. Minimise negative pseudo-log-likelihood over GH shape parameters
-           using Nelder-Mead on an unconstrained reparametrisation.
+        6. Minimise negative pseudo-log-likelihood over the GH shape parameters
+           [alpha_bar, beta_bar] using Nelder-Mead, with a feasibility barrier
+           enforcing alpha_bar > |beta_bar|.
 
         Parameters
         --
@@ -1405,7 +1405,6 @@ class PrincipalComponentCopula:
         X: np.ndarray,
         k: int = 1,
         eps: float = 1e-12,
-        tol: float = 1e-6,
         ftol: float = 1e-4,
         a: float = -10.0,
         b: float = 10.0,
@@ -1439,11 +1438,9 @@ class PrincipalComponentCopula:
         --
         X         : (n, d) array
         eps       : float   clipping for Phi^{-1}
-        tol       : float   convergence tolerance on shape change
         a, b      : float   COS truncation interval
         Nc        : int     COS cosine terms
         n_grid    : int     inverse-CDF grid size
-        shrinkage : None or "ledoit_wolf"
 
         Returns
         ---
@@ -1885,7 +1882,6 @@ class PrincipalComponentCopula:
         k: int = 1,
         dependent: bool = False,
         eps: float = 1e-12,
-        tol: float = 1e-6,
         ftol: float = 1e-4,
         a: float = -10.0,
         b: float = 10.0,
@@ -1918,7 +1914,7 @@ class PrincipalComponentCopula:
         X         : (n, d) array of raw observations
         k         : number of leading PCs with Skew-t distribution
         dependent : bool  -- see above
-        eps, tol, ftol, a, b, Nc, n_grid : see fit_t_gmm
+        eps, ftol, a, b, Nc, n_grid : see fit_t_gmm
 
         Returns
         ---
@@ -2777,18 +2773,23 @@ class PrincipalComponentCopula:
         Follows the data generating process of Fig. 3b (right -> left):
         1. Sample P from the fitted generator distributions.
         2. Rotate:  Y = W P  (row-wise: y_row = p_row @ W').
-        3. Map to copula observations:  U_i = Phi(Y_i).
+        3. Map to copula observations:  U_i = F_{Y_i}(Y_i), where F_{Y_i} is
+           the COS-method CDF of the fitted marginal characteristic function
+           (Eqs. 14-16, 22 of the paper) -- evaluated on a fine grid and
+           applied via monotone interpolation.
 
-        Step 3 uses standard-normal marginals consistent with the pseudo-
-        likelihood fitting scheme.  For exact copula marginals F_{Y_i}
-        derived via characteristic functions (Eqs. 14-16 of the paper),
-        replace Phi with the COS-method CDF.
+        Step 3 uses the exact marginal CDFs implied by the fitted generators
+        (not standard-normal marginals), so the simulated U are draws from the
+        fitted copula itself.
 
         Parameters
         --
         n_samples : int
         return_y  : bool
-            If True, also return the latent normal-score matrix Y.
+            If True, also return the latent model variates Y = W P.
+        return_p  : bool
+            If True, also return the latent principal-component scores P sampled
+            from the fitted generator distributions.
         seed : int, np.random.Generator, or None
             Seed for reproducibility.  An integer creates a new Generator;
             a Generator is used directly; None (default) gives random results.
@@ -2796,7 +2797,15 @@ class PrincipalComponentCopula:
         Returns
         ---
         U : np.ndarray, shape (n_samples, d) -- copula samples in (0, 1)^d.
-        Y : np.ndarray, shape (n_samples, d) -- only returned when return_y=True.
+            Returned alone when ``return_y`` and ``return_p`` are both False.
+            When extra outputs are requested they are returned in a tuple, in
+            the order  ``(U, Y)``       if only ``return_y`` is True,
+                       ``(U, P)``       if only ``return_p`` is True,
+                       ``(U, Y, P)``    if both are True.
+        Y : np.ndarray, shape (n_samples, d) -- latent variates Y = W P
+            (only included when ``return_y=True``).
+        P : np.ndarray, shape (n_samples, d) -- principal-component scores
+            (only included when ``return_p=True``).
 
         Raises
         --
@@ -3007,10 +3016,16 @@ class PrincipalComponentCopula:
             Z_j  ~ N(0, 1)  independently for j=1,...,k
             P_j  = mu_j + gamma_j V + sqrt(Sigma_{j,j} V) Z_j
 
-        Higher PCs — independent shared mixing variable (Eq. 9):
+        Higher PCs — second multivariate-t block with its own shared mixing
+        variable W_mix (Eq. 9):
             W_mix ~ IG(nu_rest/2, nu_rest/2)
-            Z_j   ~ N(0, 1)
+            Z_j   ~ N(0, 1)  independently for j=k+1,...,d
             P_j   = sqrt(Sigma_{j,j}) sqrt(W_mix) Z_j
+
+        All d-k higher PCs share the single mixing variable W_mix, so they form
+        a multivariate-t block and are NOT mutually independent.  W_mix is,
+        however, drawn independently of the first block's mixing variable V, so
+        the two blocks are independent of each other.
 
         Rotation and copula observations via COS-CDF marginals.
         """
