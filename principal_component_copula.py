@@ -50,6 +50,16 @@ class PrincipalComponentCopula:
     def __init__(
         self, dim: int, cop_type: Literal["t", "cross", "normal"] = "t", k: int = 1
     ):
+        if cop_type not in {"t", "cross", "normal"}:
+            raise ValueError(
+                f"cop_type must be one of 't', 'cross', 'normal'; got {cop_type!r}."
+            )
+        if not isinstance(dim, (int, np.integer)) or dim <= 0:
+            raise ValueError(f"dim must be a positive int; got {dim!r}.")
+        if not isinstance(k, (int, np.integer)) or not (1 <= k <= dim):
+            raise ValueError(
+                f"k must be a positive int with 1 <= k <= dim={dim}; got {k!r}."
+            )
         self.type = cop_type
         self.dim = dim
         self.k = k
@@ -1099,6 +1109,16 @@ class PrincipalComponentCopula:
         W      : np.ndarray, shape (d, d)
         Lambda : np.ndarray, shape (d,)
         """
+        X = np.asarray(X, float)
+        if X.ndim != 2:
+            raise ValueError(f"X must be a 2-D array; got ndim={X.ndim}.")
+        if X.shape[1] != self.dim:
+            raise ValueError(
+                f"X has {X.shape[1]} columns but the model dimension is {self.dim}."
+            )
+        if not np.all(np.isfinite(X)):
+            raise ValueError("X must contain only finite values (no NaN or inf).")
+
         self.method = method
         self.max_iters = max_iters
         if self.type == "normal":
@@ -1121,7 +1141,7 @@ class PrincipalComponentCopula:
         return (
             self.fit_cross_gmm(X, k=self.k, dependent=dependent)
             if self.method == "GMM"
-            else self.fit_cross_mle
+            else self.fit_cross_mle(X)
         )
 
     # HB-N  --  GMM fit
@@ -1333,7 +1353,7 @@ class PrincipalComponentCopula:
                         converged, n_iter.
         """
         if k > self.dim:
-            raise (f"Dependent block bigger than df k={k}>{self.dim}=d")
+            raise ValueError(f"Dependent block bigger than dim: k={k}>{self.dim}=d")
 
         n, _ = X.shape
         # Section 3.1:  pseudo-copula observations
@@ -2608,7 +2628,21 @@ class PrincipalComponentCopula:
         d = self.dim
 
         #  First PC: GH distribution (already fitted in fit_normal_gmm)
-        P1 = genhyperbolic.rvs(*params, size=n_samples, random_state=rng)
+        # params is the dict {lam, chi, psi, mu, beta_bar, alpha_bar} from
+        # _gh_constrained_params; map it to scipy's positional convention
+        # genhyperbolic.rvs(p, a, b, loc, scale) in the Sigma=1 convention
+        # where natural alpha == alpha_bar and delta == sqrt(chi).
+        chi = params["chi"]
+        delta = np.sqrt(chi)
+        P1 = genhyperbolic.rvs(
+            params["lam"],
+            params["alpha_bar"] * delta,
+            params["beta_bar"] * delta,
+            loc=params["mu"],
+            scale=delta,
+            size=n_samples,
+            random_state=rng,
+        )
 
         #  Higher PCs: Gaussian with variances Lambda_j (j > 1)
         P_rest = rng.normal(
